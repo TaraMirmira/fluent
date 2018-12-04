@@ -30,4 +30,4 @@ replication:
   memory: 1
   ebs: 0
   minimum: 1
-  local: 1
+  local: 2

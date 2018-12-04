@@ -20,9 +20,20 @@
 #include "spdlog/spdlog.h"
 #include "threads.hpp"
 #include "yaml-cpp/yaml.h"
+#include <string>
+#include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
 
 unsigned kRoutingThreadCount;
 unsigned kDefaultLocalReplication;
+int count = 0;
+int stop = 0;
+int good = 0;
+double total_time = 0;
+int addrs_set = 0;
+Address put_worker;
+Address get_worker;
 
 ZmqUtil zmq_util;
 ZmqUtilInterface* kZmqUtil = &zmq_util;
@@ -76,12 +87,26 @@ void handle_request(
     std::vector<Address> addresses = kHashRingUtil->get_address_from_routing(
         ut, key, pushers[target_routing_address], key_address_puller, succeed,
         ip, thread_id, rid);
+    if (addrs_set == 0) {
+      put_worker = addresses[0];
+      get_worker = addresses[1];
+      addrs_set = 1;
+      // std::cout << "addrs set\n";
+      // std::cout << "put worker is: " + put_worker + "\n";
+      // std::cout << "get worker is: " + get_worker + "\n";
+    }
 
     if (succeed) {
       for (const std::string& address : addresses) {
         key_address_cache[key].insert(address);
+        // std::cout << "addrs is: " + address + "\n";
       }
-      worker_address = addresses[rand_r(&seed) % addresses.size()];
+      if (v[0] == "GET") {
+        worker_address = get_worker;
+      } else {
+        worker_address = put_worker;
+      }
+      // worker_address = addresses[rand_r(&seed) % addresses.size()];
     } else {
       logger->error(
           "Request timed out when querying routing. This should never happen!");
@@ -92,10 +117,17 @@ void handle_request(
       logger->error("Address cache for key " + key + " has size 0.");
       return;
     }
+    if (v[0] == "GET") {
+      worker_address = get_worker;
+    } else {
+      worker_address = put_worker;
+    }
 
-    worker_address = *(next(begin(key_address_cache[key]),
-                            rand_r(&seed) % key_address_cache[key].size()));
+    // worker_address = *(next(begin(key_address_cache[key]),
+                            // rand_r(&seed) % key_address_cache[key].size()));
   }
+  // std::cout << "worker addr is: " + worker_address + "\n";
+
 
   KeyRequest req;
   req.set_response_address(ut.get_request_pulling_connect_addr());
@@ -152,12 +184,22 @@ void handle_request(
         key_address_cache.erase(key);
       }
       if (value == "" && tuple.error() == 0) {
-        std::cout << "value of key " + tuple.key() + " is " + tuple.value() +
-                         "\n";
+        // std::cout << "value of key " + tuple.key() + " is " + tuple.value() +
+                         // "\n";
+        good += 1;
+        stop = 1;
+        // if (tuple.value() != "1") {
+          // anything_else += 1;
+          // count += 1;
+        // }
+        // std::cout << "worker addr is: " + worker_address + "\n";
       } else if (value == "" && tuple.error() == 1) {
-        std::cout << "key " + tuple.key() + " does not exist\n";
+        // std::cout << "key " + tuple.key() + " does not exist\n";
+        count += 1;
+        // std::cout << "worker addr is: " + worker_address + "\n";
       } else if (value != "") {
-        std::cout << "successfully put key " + tuple.key() + "\n";
+        // std::cout << "successfully put key " + tuple.key() + "\n";
+        // std::cout << "worker addr is: " + worker_address + "\n";
       }
     }
   } else {
@@ -229,34 +271,62 @@ void run(unsigned thread_id, std::string filename, Address ip,
 
   std::string input;
   unsigned trial = 1;
-  if (filename == "") {
-    while (true) {
-      std::cout << "kvs> ";
-
-      getline(std::cin, input);
+  struct timeval time;
+  double start;
+  double end;
+  // if (filename == "") {
+    // while (true) {
+      // std::cout << "kvs> ";
+    for (int i = 0; i < 100001; i++) {
+      if (stop == 1) {
+        gettimeofday(&time,NULL);
+        end = (double)time.tv_sec + (double)time.tv_usec * .000001;
+        break;
+      }
+      if (i == 1) {
+        gettimeofday(&time,NULL);
+        start = (double)time.tv_sec + (double)time.tv_usec * .000001;
+      }
+      if (i == 0) {
+      input = "PUT x 1";
+      // } else if (i == 1) {
+        // input = "PUT x 2";
+      } else if (i>=1) {
+        input = "GET x";
+        // std::cout << "sleep for 1 sec\n";
+        // usleep(1000000*1/1000);
+      } else {
+        // std::cout << "sleep for 1 sec\n";
+        // usleep(1000000*1);
+        input = "GET x";
+      }
+      // std::cout << input + "\n";
+      // getline(std::cin, input);
       handle_request(input, pushers, routing_addresses, key_address_cache, seed,
                      logger, ut, response_puller, key_address_puller, ip,
                      thread_id, rid, trial);
     }
-  } else {
-    std::ifstream infile(filename);
-
-    while (getline(infile, input)) {
-      handle_request(input, pushers, routing_addresses, key_address_cache, seed,
-                     logger, ut, response_puller, key_address_puller, ip,
-                     thread_id, rid, trial);
-    }
-  }
+    total_time = end - start;
+    // }
+  // } else {
+    // std::ifstream infile(filename);
+//
+    // while (getline(infile, input)) {
+      // handle_request(input, pushers, routing_addresses, key_address_cache, seed,
+                     // logger, ut, response_puller, key_address_puller, ip,
+                     // thread_id, rid, trial);
+    // }
+  // }
 }
 
 int main(int argc, char* argv[]) {
-  if (argc > 2) {
-    std::cerr << "Usage: " << argv[0] << "<filename>" << std::endl;
-    std::cerr
-        << "Filename is optional. Omit the filename to run in interactive mode."
-        << std::endl;
-    return 1;
-  }
+  // if (argc > 2) {
+    // std::cerr << "Usage: " << argv[0] << "<filename>" << std::endl;
+    // std::cerr
+        // << "Filename is optional. Omit the filename to run in interactive mode."
+        // << std::endl;
+    // return 1;
+  // }
 
   // read the YAML conf
   YAML::Node conf = YAML::LoadFile("conf/kvs-config.yml");
@@ -271,9 +341,23 @@ int main(int argc, char* argv[]) {
   for (const YAML::Node& node : routing) {
     routing_addresses.push_back(node.as<Address>());
   }
-  if (argc == 1) {
+  // if (argc == 1) {
     run(0, "", ip, routing_addresses);
-  } else {
-    run(0, argv[1], ip, routing_addresses);
-  }
+  // } else {
+    // std::string word = std::string(argv[1]);
+    // std::cout << "filename is: " + word + "\n";
+    // std::cout << argv[1];
+    // std::string word (argv[1]);
+    // std::string put("put");
+    // if (word.find(put) != std::string::npos) {
+      // run(0, argv[1], ip, routing_addresses);
+    // } else {
+      // run(0, argv[1], ip, routing_addresses);
+    std::cout << std::to_string(total_time) + "\n";
+    // std::cout << std::to_string(count) + "\n";
+      // std::cout << "Number of stale reads was " + std::to_string(count) + "\n";
+      // std::cout << "Number of good reads was " + std::to_string(good) + "\n";
+      // std::cout << "Number of anything else reads was " + std::to_string(anything_else) + "\n";
+    // }
+  // }
 }
